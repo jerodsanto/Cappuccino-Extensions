@@ -560,7 +560,11 @@ var CPActiveRecordIdentifierKey = @"id";
 
 - (CPURLRequest)recordWillSave
 {
-    var path = [self resourcePath];
+    if (identifier)
+        var path = [self resourcePath];
+    else
+        var path = [[self class] resourcesPath];
+    
     if (!path)
         return nil;
     
