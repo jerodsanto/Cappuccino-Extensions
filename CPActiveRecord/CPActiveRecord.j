@@ -42,6 +42,7 @@ var CPActiveRecordIdentifierKey = @"id";
     CPString        identifier      @accessors;
     
     JSObject        _lastSync;
+    BOOL            _invalidated;
 }
 
 + (void)initialize
@@ -115,9 +116,24 @@ var CPActiveRecordIdentifierKey = @"id";
             components[i] = [components[i] capitalizedString];
         var camelCased = [components componentsJoinedByString:@""];
         
+        var value = attributes[attribute];
+        if ([[self class] respondsToSelector:@selector(foreignKeys)])
+        {
+            var foreignKeys = [[self class] foreignKeys];
+            for (var i = 0, count = [foreignKeys count]; i < count; i++)
+            {
+                var foreignKey = foreignKeys[i];
+                if (foreignKey['key'] != camelCased)
+                    continue;
+                
+                value = [foreignKey['model'] find:value];
+                break;
+            }
+        }
+        
         try
         {
-            [record setValue:attributes[attribute] forKey:camelCased];
+            [record setValue:value forKey:camelCased];
         }
         catch (anException)
         {
@@ -417,6 +433,18 @@ var CPActiveRecordIdentifierKey = @"id";
     }
 }
 
++ (void)loadWithURL:(CPURL)aURL
+{
+    self._overwriteResourcesPath = aURL;
+    [self reload];
+}
+
+- (void)loadWithURL:(CPURL)aURL
+{
+    self._overwriteResourcePath = aURL;
+    [self reload];
+}
+
 + (void)reload
 {
     self._CPActiveRecordLastSync = 0;
@@ -459,6 +487,19 @@ var CPActiveRecordIdentifierKey = @"id";
     return NO;
 }
 
+- (void)raiseValidationError:(JSObject)errorObj
+{
+    CPLog.info(@"Server refused record: " + errorObj);
+}
+
++ (void)connection:(CPURLConnection)aConnection didReceiveResponse:(CPURLResponse)aResponse
+{
+    var code = [aResponse statusCode];
+    
+    if (code == 422 && aConnection.postTarget)
+        aConnection.postTarget._invalidated = YES;
+}
+
 + (void)connection:(CPURLConnection)aConnection didReceiveData:(CPString)aResponse
 {
     try
@@ -469,6 +510,12 @@ var CPActiveRecordIdentifierKey = @"id";
     {
         CPLog.info(@"Could not load resource");
         return;
+    }
+    
+    if (aConnection.postTarget && aConnection.postTarget._invalidated)
+    {
+        aConnection.postTarget._invalidated = NO;
+        return [aConnection.postTarget raiseValidationError:data];
     }
     
     [CPActiveRecord parseData:data];
@@ -517,7 +564,7 @@ var CPActiveRecordIdentifierKey = @"id";
             }
             else
             {
-                var model = objj_getClass([key capitalizedString]);
+                var model = objj_getClass(key.charAt(0).toUpperCase() + key.substring(1));
                 [model new:data[key]];
             }
         }
@@ -528,7 +575,15 @@ var CPActiveRecordIdentifierKey = @"id";
 
 + (CPURLRequest)collectionWillLoad
 {
-    var path = [self resourcesPath];
+    var path;
+    if (self._overwriteResourcesPath)
+    {
+        path = self._overwriteResourcesPath;
+        self._overwriteResourcesPath = nil;
+    }
+    else
+        path = [self resourcesPath];
+    
     if (!path)
         return nil;
     
@@ -544,7 +599,15 @@ var CPActiveRecordIdentifierKey = @"id";
 
 - (CPURLRequest)recordWillLoad
 {
-    var path = [self resourcePath];
+    var path;
+    if (self._overwriteResourcePath)
+    {
+        path = self._overwriteResourcePath;
+        self._overwriteResourcePath = nil;
+    }
+    else
+        path = [self resourcePath];
+    
     if (!path)
         return nil;
     
